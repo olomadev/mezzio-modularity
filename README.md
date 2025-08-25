@@ -1,1 +1,1 @@
-# mezzio-modx
+# mmezzio-modularity
