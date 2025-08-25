@@ -270,11 +270,11 @@ class ColumnFilters implements ColumnFiltersInterface
             }
         }
         // Sort data
-        if (! empty($data['_sort'])) {
+        if (! empty($data['sort'])) {
             $o = 0;
-            foreach ($data['_sort'] as $colName) {
-                if (false == empty($colName) && isset($this->columns[$colName]) && false == empty($data['_order'])) {
-                    $direction           = strtolower($data['_order'][$o]) == 'asc' ? 'ASC' : 'DESC';
+            foreach ($data['sort'] as $colName) {
+                if (false == empty($colName) && isset($this->columns[$colName]) && false == empty($data['order'])) {
+                    $direction           = strtolower($data['order'][$o]) == 'asc' ? 'ASC' : 'DESC';
                     $formattedColName    = empty($this->alias[$colName]) ? $colName : $this->alias[$colName];
                     $this->orderData[$o] = $formattedColName . ' ' . $direction;
                     ++$o;
