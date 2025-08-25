@@ -1,0 +1,39 @@
+{
+    "name": "olomadev/mezzio-modularity",
+    "description": "Extended modular features for Mezzio: modules, migrations, attribute-based routing, open api etc.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["mezzio", "modularity", "modular", "modules", "migration", "attributes", "routing", "swagger", "api", "rest", "open-api"],
+    "authors": [
+        {
+            "name": "Ersin Güvenç",
+            "email": "eguvenc@gmail.com",
+            "homepage": "https://mezzio-modularity.oloma.dev"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+           "Modularity\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modularity\\ModularityTest": "test/"
+        }
+    },
+    "require": {
+        "php": "^8.1",
+        "mezzio/mezzio": "^3.11",
+        "laminas/laminas-servicemanager": "^3.17",
+        "doctrine/migrations": "^3.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0"
+    },
+    "extra": {
+        "laminas": {
+            "component": "Modularity",
+            "config-provider": "Modularity\\ConfigProvider"
+        }
+    }
+}
