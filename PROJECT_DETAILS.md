@@ -1,5 +1,5 @@
 
-# Mezzio Modularity Project v1.0
+# Mezzio Modularity Project v1.0 Details
 
 
 ## Directory Structure of Modules
@@ -37,8 +37,7 @@
 
 			ConfigProvider.php
 			composer.json
-
-
+```
 
 ## ConfigProvider.php
 
@@ -524,6 +523,111 @@ abstract class AbstractEntity
 }
 ```
 
+Modularity / Entity / EntityMiddleware.php
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Modularity\Middleware;
+
+use Laminas\Db\Adapter\AdapterInterface;
+use Laminas\Diactoros\Response\JsonResponse;
+use Laminas\InputFilter\InputFilterPluginManager;
+use Mezzio\Router\RouteResult;
+use Modularity\Attribute\Entity;
+use Modularity\Filter\AttributeInputFilterCollector;
+use Modularity\Mapper\InputSchemaMapper;
+use Modularity\Validation\ValidationErrorFormatterInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Server\RequestHandlerInterface;
+use ReflectionClass;
+
+use function get_object_vars;
+use function in_array;
+use function is_a;
+
+class EntityMiddleware implements MiddlewareInterface
+{
+    private static array $cache = [];
+
+    public function __construct(
+        private InputFilterPluginManager $filterManager,
+        private ValidationErrorFormatterInterface $errorFormatter,
+        private AdapterInterface $adapter
+    ) {
+    }
+
+    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
+    {
+        $routeResult  = $request->getAttribute(RouteResult::class);
+        $matchedRoute = $routeResult?->getMatchedRoute();
+
+        if (! $matchedRoute) {
+            return $handler->handle($request);
+        }
+        $middlewarePipe = $matchedRoute->getMiddleware();
+
+        $ref  = new ReflectionClass($middlewarePipe);
+        $prop = $ref->getProperty('pipeline');
+        $prop->setAccessible(true);
+
+        $queue = $prop->getValue($middlewarePipe);
+
+        foreach ($queue as $entry) {
+            $vars = get_object_vars($entry);
+            $name = $vars['middlewareName'] ?? null;
+
+            if ($name === null || ! is_a($name, RequestHandlerInterface::class, true)) {
+                continue;
+            }
+
+            // op cache
+            if (! isset(self::$cache[$name])) {
+                $ref = new ReflectionClass($name);
+                if ($ref->hasMethod('handle')) {
+                    $method             = $ref->getMethod('handle');
+                    $attributes         = $method->getAttributes(Entity::class);
+                    self::$cache[$name] = $attributes
+                        ? $attributes[0]->newInstance()
+                        : null;
+                } else {
+                    self::$cache[$name] = null;
+                }
+            }
+
+            $entityAttribute = self::$cache[$name];
+            if ($entityAttribute instanceof Entity) {
+                if (in_array($request->getMethod(), ['POST', 'PUT', 'OPTIONS'], true)) {
+                    $inputData = $request->getParsedBody();
+                } else {
+                    $inputData = $request->getQueryParams();
+                }
+                if (isset($entityAttribute->dto) && $entityAttribute->dto) {
+                    $dto       = new ($entityAttribute->dto)();
+                    $collector = new AttributeInputFilterCollector($this->filterManager, $this->adapter);
+                    $filter    = $collector->fromObject($dto, $inputData);
+                    if (! $filter->isValid()) {
+                        return new JsonResponse($this->errorFormatter->format($filter), 400);
+                    }
+                    $mapper = new InputSchemaMapper();
+                    $entity = $mapper->mapToEntity($filter, $dto, $entityAttribute->entity);
+                } else {
+                    $mapper = new InputSchemaMapper();
+                    $entity = $mapper->mapToEntity($filter, $entityAttribute->entity);
+                }
+                $request = $request->withAttribute('entity', $entity);
+            }
+        }
+
+        return $handler->handle($request);
+    }
+}
+```
+
 ## Repository \ PermissionRepository
 
 ```php
@@ -895,6 +999,214 @@ abstract class AbstractRepository implements EventManagerAwareInterface
     public function getAdapter(): AdapterInterface
     {
         return $this->adapter;
+    }
+}
+```
+
+
+Modularity / Router / AttributeRouteCollector.php
+
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace Modularity\Router;
+
+use Mezzio\Application;
+use Modularity\Attribute\Route;
+use Psr\Container\ContainerInterface;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use RecursiveRegexIterator;
+use ReflectionClass;
+use RegexIterator;
+use RuntimeException;
+
+use function basename;
+use function class_exists;
+use function count;
+use function current;
+use function explode;
+use function file_exists;
+use function file_put_contents;
+use function filemtime;
+use function is_array;
+use function is_dir;
+use function max;
+use function opcache_get_status;
+use function str_replace;
+use function var_export;
+
+class AttributeRouteCollector implements AttributeRouteProviderInterface
+{
+    private string $cacheFile;
+
+    /** @var array|null */
+    private static ?array $opcacheRoutes = null;
+
+    public function __construct(
+        private Application $app,
+        private ContainerInterface $container,
+        private string $modulesBasePath = APP_ROOT . '/src/',
+        private string $namespacePrefix = 'Modules\\',
+        string $cacheDir = APP_ROOT . '/data/cache'
+    ) {
+        $this->cacheFile = $cacheDir . '/routes.cache.php';
+    }
+
+    public function registerRoutes(string $dir): void
+    {
+        $moduleName  = basename($dir);
+        $handlerPath = $this->modulesBasePath . $moduleName . "/src/Handler/";
+
+        if (! is_dir($handlerPath)) {
+            throw new RuntimeException("Handler folder not found at: $moduleName/src/");
+        }
+
+        $files        = $this->findHandlerFiles($handlerPath);
+        $lastModified = $this->getLastModified($files);
+
+        // 1. Try load from OPcache first
+        if ($this->canUseOpcache()) {
+            if (self::$opcacheRoutes !== null && self::$opcacheRoutes['_lastModified'] === $lastModified) {
+                $this->registerFromCache(self::$opcacheRoutes);
+                return;
+            }
+
+            if ($this->isCacheValid($lastModified)) {
+                $routes              = include $this->cacheFile;
+                self::$opcacheRoutes = $routes;
+                $this->registerFromCache($routes);
+                return;
+            }
+        }
+
+        // 2. If OPcache is not available or cache is invalid
+        if (! $this->canUseOpcache() && $this->isCacheValid($lastModified)) {
+            $routes = include $this->cacheFile;
+            $this->registerFromCache($routes);
+            return;
+        }
+
+        // 3. Cache invalid → regenerate routes
+        $routes = $this->generateRoutes($files);
+        $this->writeCache($routes, $lastModified);
+
+        // If there is OPcache, store it in memory
+        if ($this->canUseOpcache()) {
+            self::$opcacheRoutes = [
+                '_lastModified' => $lastModified,
+                'data'          => $routes,
+            ];
+        }
+    }
+
+    private function findHandlerFiles(string $handlerPath): array
+    {
+        $iterator   = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($handlerPath));
+        $foundFiles = new RegexIterator($iterator, '/^.+Handler\.php$/i', RecursiveRegexIterator::GET_MATCH);
+
+        $files = [];
+        foreach ($foundFiles as $file) {
+            $files[] = current($file);
+        }
+        return $files;
+    }
+
+    private function getLastModified(array $files): int
+    {
+        $times = [];
+        foreach ($files as $file) {
+            $times[] = filemtime($file);
+        }
+        return max($times);
+    }
+
+    private function isCacheValid(int $lastModified): bool
+    {
+        if (! file_exists($this->cacheFile)) {
+            return false;
+        }
+        $data = include $this->cacheFile;
+        return isset($data['_lastModified']) && $data['_lastModified'] === $lastModified;
+    }
+
+    private function generateRoutes(array $files): array
+    {
+        $routes = [];
+        foreach ($files as $file) {
+            $class = $this->resolveNamespace($file);
+            if (! class_exists($class)) {
+                continue;
+            }
+            $ref        = new ReflectionClass($class);
+            $attributes = $ref->getAttributes(Route::class);
+
+            if (count($attributes) === 0) {
+                continue;
+            }
+
+            foreach ($attributes as $attribute) {
+                /** @var Route $route */
+                $route = $attribute->newInstance();
+
+                $namespaceParts = explode('\\', $ref->getNamespaceName());
+                $module         = $namespaceParts[0] ?? 'UnknownModule';
+                $pipeline       = [...$route->middlewares, $class];
+                $meta           = $route->meta ?? [];
+
+                if (! isset($meta['module'])) {
+                    $meta['module'] = $module;
+                }
+
+                $routes[] = [
+                    'path'     => $route->path,
+                    'pipeline' => $pipeline,
+                    'methods'  => $route->methods,
+                    'options'  => ['meta' => $meta],
+                ];
+
+                $this->app->route($route->path, $pipeline, $route->methods)
+                    ->setOptions(['meta' => $meta]);
+            }
+        }
+        return $routes;
+    }
+
+    private function registerFromCache(array $routes): void
+    {
+        foreach ($routes['data'] as $r) {
+            $this->app->route($r['path'], $r['pipeline'], $r['methods'])
+                ->setOptions($r['options']);
+        }
+    }
+
+    private function writeCache(array $routes, int $lastModified): void
+    {
+        $data = [
+            '_lastModified' => $lastModified,
+            'data'          => $routes,
+        ];
+
+        file_put_contents(
+            $this->cacheFile,
+            "<?php\n\nreturn " . var_export($data, true) . ";\n"
+        );
+    }
+
+    private function resolveNamespace(string $filePath): ?string
+    {
+        $basePath = APP_ROOT . '/src/';
+        $relative = str_replace([$basePath, '/', '.php'], ['', '\\', ''], $filePath);
+        return str_replace('\\src\\', '\\', $relative);
+    }
+
+    private function canUseOpcache(): bool
+    {
+        $status = opcache_get_status(false);
+        return is_array($status) && ! empty($status['opcache_enabled']);
     }
 }
 ```
