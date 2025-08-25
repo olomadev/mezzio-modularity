@@ -4,6 +4,8 @@
 
 ## Directory Structure of Modules
 
+**Example module Authorization:**
+
 ```
 - src
 	- Authorization
