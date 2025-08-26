@@ -1,9 +1,9 @@
 {
     "name": "olomadev/mezzio-modularity",
-    "description": "Extended modular features for Mezzio: modules, migrations, attribute-based routing, open api etc.",
+    "description": "Extended modular features for Mezzio: modules, migrations, attribute-based routing, column filters, open api etc.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["mezzio", "modularity", "modular", "modules", "migration", "attributes", "routing", "swagger", "api", "rest", "open-api"],
+    "keywords": ["mezzio", "modularity", "modular", "modules", "migration", "attributes", "routing", "filters", "swagger", "api", "rest", "open-api"],
     "authors": [
         {
             "name": "Ersin Güvenç",
