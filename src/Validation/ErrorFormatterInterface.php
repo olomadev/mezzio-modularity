@@ -6,7 +6,7 @@ namespace Modularity\Validation;
 
 use Laminas\InputFilter\InputFilterInterface;
 
-interface ValidationErrorFormatterInterface
+interface ErrorFormatterInterface
 {
     public function format(InputFilterInterface $filter): array;
 }

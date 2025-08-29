@@ -27,6 +27,7 @@ use function is_dir;
 use function max;
 use function opcache_get_status;
 use function str_replace;
+use function strtolower;
 use function var_export;
 
 class AttributeRouteCollector implements AttributeRouteProviderInterface
@@ -40,7 +41,6 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         private Application $app,
         private ContainerInterface $container,
         private string $modulesBasePath = APP_ROOT . '/src/',
-        private string $namespacePrefix = 'Modules\\',
         string $cacheDir = APP_ROOT . '/data/cache'
     ) {
         $this->cacheFile = $cacheDir . '/routes.cache.php';
@@ -48,8 +48,9 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
 
     public function registerRoutes(string $dir): void
     {
-        $moduleName  = basename($dir);
-        $handlerPath = $this->modulesBasePath . $moduleName . "/src/Handler/";
+        $moduleName      = basename($dir);
+        $handlerPath     = $this->modulesBasePath . $moduleName . "/src/Handler/";
+        $this->cacheFile = APP_ROOT . "/data/cache/routes." . strtolower($moduleName) . ".cache.php";
 
         if (! is_dir($handlerPath)) {
             throw new RuntimeException("Handler folder not found at: $moduleName/src/");
@@ -58,35 +59,35 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         $files        = $this->findHandlerFiles($handlerPath);
         $lastModified = $this->getLastModified($files);
 
-        // 1. Try load from OPcache first
         if ($this->canUseOpcache()) {
-            if (self::$opcacheRoutes !== null && self::$opcacheRoutes['_lastModified'] === $lastModified) {
-                $this->registerFromCache(self::$opcacheRoutes);
-                return;
+            if (self::$opcacheRoutes[$moduleName] ?? false) {
+                $cached = self::$opcacheRoutes[$moduleName];
+                if ($cached['_lastModified'] === $lastModified) {
+                    $this->registerFromCache($cached);
+                    return;
+                }
             }
 
             if ($this->isCacheValid($lastModified)) {
-                $routes              = include $this->cacheFile;
-                self::$opcacheRoutes = $routes;
+                $routes                           = include $this->cacheFile;
+                self::$opcacheRoutes[$moduleName] = $routes;
                 $this->registerFromCache($routes);
                 return;
             }
         }
 
-        // 2. If OPcache is not available or cache is invalid
         if (! $this->canUseOpcache() && $this->isCacheValid($lastModified)) {
             $routes = include $this->cacheFile;
             $this->registerFromCache($routes);
             return;
         }
 
-        // 3. Cache invalid → regenerate routes
+        // If cache does not exist/is not up to date, create a new one
         $routes = $this->generateRoutes($files);
         $this->writeCache($routes, $lastModified);
 
-        // If there is OPcache, store it in memory
         if ($this->canUseOpcache()) {
-            self::$opcacheRoutes = [
+            self::$opcacheRoutes[$moduleName] = [
                 '_lastModified' => $lastModified,
                 'data'          => $routes,
             ];

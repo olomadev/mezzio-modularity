@@ -10,7 +10,7 @@ use function array_values;
 use function is_array;
 use function is_string;
 
-class ValidationErrorFormatter implements ValidationErrorFormatterInterface
+class ErrorFormatter implements ValidationErrorFormatterInterface
 {
     private string $responseKey;
     private bool $multipleError;
