@@ -14,7 +14,6 @@ use ReflectionClass;
 use RegexIterator;
 use RuntimeException;
 
-use function basename;
 use function class_exists;
 use function count;
 use function current;
@@ -32,25 +31,29 @@ use function var_export;
 
 class AttributeRouteCollector implements AttributeRouteProviderInterface
 {
+    /** @var string Cache file path for the current module */
     private string $cacheFile;
 
-    /** @var array|null */
-    private static ?array $opcacheRoutes = null;
+    /** @var array<string, array>|null Stores routes cached in OPcache per module */
+    private static array $opcacheRoutesByModule = [];
 
     public function __construct(
         private Application $app,
         private ContainerInterface $container,
         private string $modulesBasePath = APP_ROOT . '/src/',
-        string $cacheDir = APP_ROOT . '/data/cache'
+        private string $cacheDir = APP_ROOT . '/data/cache'
     ) {
-        $this->cacheFile = $cacheDir . '/routes.cache.php';
     }
 
-    public function registerRoutes(string $dir): void
+    /**
+     * Register routes for a single module.
+     * Uses module-specific file cache and OPcache memory to avoid duplicates.
+     */
+    public function registerRoutes(string $moduleName): void
     {
-        $moduleName      = basename($dir);
+        $moduleKey       = strtolower($moduleName);
+        $this->cacheFile = $this->cacheDir . '/routes.' . $moduleKey . '.cache.php';
         $handlerPath     = $this->modulesBasePath . $moduleName . "/src/Handler/";
-        $this->cacheFile = APP_ROOT . "/data/cache/routes." . strtolower($moduleName) . ".cache.php";
 
         if (! is_dir($handlerPath)) {
             throw new RuntimeException("Handler folder not found at: $moduleName/src/");
@@ -59,41 +62,52 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         $files        = $this->findHandlerFiles($handlerPath);
         $lastModified = $this->getLastModified($files);
 
+        // 1. Check OPcache memory first
         if ($this->canUseOpcache()) {
-            if (self::$opcacheRoutes[$moduleName] ?? false) {
-                $cached = self::$opcacheRoutes[$moduleName];
-                if ($cached['_lastModified'] === $lastModified) {
-                    $this->registerFromCache($cached);
-                    return;
-                }
+            if (
+                isset(self::$opcacheRoutesByModule[$moduleKey]) &&
+                self::$opcacheRoutesByModule[$moduleKey]['_lastModified'] === $lastModified
+            ) {
+                $this->registerFromCache(self::$opcacheRoutesByModule[$moduleKey]);
+                return;
             }
 
             if ($this->isCacheValid($lastModified)) {
-                $routes                           = include $this->cacheFile;
-                self::$opcacheRoutes[$moduleName] = $routes;
+                $routes                                  = include $this->cacheFile;
+                self::$opcacheRoutesByModule[$moduleKey] = $routes;
                 $this->registerFromCache($routes);
                 return;
             }
         }
 
+        // 2. OPcache not available but cache file is valid
         if (! $this->canUseOpcache() && $this->isCacheValid($lastModified)) {
             $routes = include $this->cacheFile;
             $this->registerFromCache($routes);
             return;
         }
 
-        // If cache does not exist/is not up to date, create a new one
+        // 3. Cache invalid → generate routes, write cache, then register
         $routes = $this->generateRoutes($files);
         $this->writeCache($routes, $lastModified);
 
+        $cacheData = [
+            '_lastModified' => $lastModified,
+            'data'          => $routes,
+        ];
+
+        // Register generated routes
+        $this->registerFromCache($cacheData);
+
+        // Store in OPcache memory if available
         if ($this->canUseOpcache()) {
-            self::$opcacheRoutes[$moduleName] = [
-                '_lastModified' => $lastModified,
-                'data'          => $routes,
-            ];
+            self::$opcacheRoutesByModule[$moduleKey] = $cacheData;
         }
     }
 
+    /**
+     * Recursively find all handler PHP files in the module.
+     */
     private function findHandlerFiles(string $handlerPath): array
     {
         $iterator   = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($handlerPath));
@@ -106,6 +120,9 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         return $files;
     }
 
+    /**
+     * Get the most recent file modification timestamp.
+     */
     private function getLastModified(array $files): int
     {
         $times = [];
@@ -115,6 +132,9 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         return max($times);
     }
 
+    /**
+     * Check if the cache file is still valid.
+     */
     private function isCacheValid(int $lastModified): bool
     {
         if (! file_exists($this->cacheFile)) {
@@ -124,6 +144,9 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         return isset($data['_lastModified']) && $data['_lastModified'] === $lastModified;
     }
 
+    /**
+     * Generate route definitions from handler classes and their Route attributes.
+     */
     private function generateRoutes(array $files): array
     {
         $routes = [];
@@ -132,6 +155,7 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
             if (! class_exists($class)) {
                 continue;
             }
+
             $ref        = new ReflectionClass($class);
             $attributes = $ref->getAttributes(Route::class);
 
@@ -158,14 +182,14 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
                     'methods'  => $route->methods,
                     'options'  => ['meta' => $meta],
                 ];
-
-                $this->app->route($route->path, $pipeline, $route->methods)
-                    ->setOptions(['meta' => $meta]);
             }
         }
         return $routes;
     }
 
+    /**
+     * Register routes into the Mezzio application from cache or generated data.
+     */
     private function registerFromCache(array $routes): void
     {
         foreach ($routes['data'] as $r) {
@@ -174,6 +198,9 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         }
     }
 
+    /**
+     * Write routes to the cache file.
+     */
     private function writeCache(array $routes, int $lastModified): void
     {
         $data = [
@@ -187,6 +214,9 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         );
     }
 
+    /**
+     * Resolve fully qualified class name from a handler file path.
+     */
     private function resolveNamespace(string $filePath): ?string
     {
         $basePath = APP_ROOT . '/src/';
@@ -194,6 +224,9 @@ class AttributeRouteCollector implements AttributeRouteProviderInterface
         return str_replace('\\src\\', '\\', $relative);
     }
 
+    /**
+     * Check if OPcache is enabled.
+     */
     private function canUseOpcache(): bool
     {
         $status = opcache_get_status(false);

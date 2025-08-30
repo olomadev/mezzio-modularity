@@ -104,8 +104,8 @@ class ModuleInstallCommand extends Command
             $composerJson = json_decode(file_get_contents($composerJsonPath), true);
             $extra        = $composerJson['extra'] ?? [];
 
-            if (! empty($extra['Modularity-module-dependencies']) && is_array($extra['Modularity-module-dependencies'])) {
-                foreach ($extra['Modularity-module-dependencies'] as $dependency => $v) {
+            if (! empty($extra['modularity-module-dependencies']) && is_array($extra['modularity-module-dependencies'])) {
+                foreach ($extra['modularity-module-dependencies'] as $dependency => $v) {
                     $output->writeln("<info>Resolving dependency: $dependency (required by $module)</info>");
                     $this->installModule($dependency, $env, $output, $visited, $v);
                 }

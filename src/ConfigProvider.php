@@ -44,22 +44,23 @@ class ConfigProvider
     {
         return [
             'factories' => [
-                DataTable\ColumnFiltersInterface::class   => DataTable\ColumnFiltersFactory::class,
-                Validation\ErrorFormatterInterface::class => Validation\ErrorFormatterFactory::class,
-                Middleware\EntityMiddleware::class        => Middleware\EntityMiddlewareFactory::class,
-                AttributeRouteProviderInterface::class    => function (ContainerInterface $container) {
+                DataTable\ColumnFiltersInterface::class             => DataTable\ColumnFiltersFactory::class,
+                Validation\ValidationErrorFormatterInterface::class => Validation\ValidationErrorFormatterFactory::class,
+                Middleware\EntityMiddleware::class                  => Middleware\EntityMiddlewareFactory::class,
+                Middleware\ModularityMiddleware::class              => Middleware\ModularityMiddlewareFactory::class,
+                AttributeRouteProviderInterface::class              => function (ContainerInterface $container) {
                     return new AttributeRouteCollector(
                         $container->get(Application::class),
                         $container
                     );
                 },
-                PermissionRepositoryInterface::class      => function ($container) {
+                PermissionRepositoryInterface::class                => function ($container) {
                     if ($container->has(PermissionRepository::class)) {
                         return $container->get(PermissionRepository::class);
                     }
                     return new NullPermissionRepository();
                 },
-                RoleRepositoryInterface::class            => function ($container) {
+                RoleRepositoryInterface::class                      => function ($container) {
                     if ($container->has(RoleRepository::class)) {
                         return $container->get(RoleRepository::class);
                     }
